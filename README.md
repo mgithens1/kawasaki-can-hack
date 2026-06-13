@@ -1,193 +1,215 @@
-# Kawasaki Ninja 7 Hybrid — CAN Bus Diagnostic Tools
+# Kawasaki Ninja 7 Hybrid — CAN Bus Reverse Engineering
 
-Tools for reverse-engineering and reading live data from the Kawasaki Ninja 7 Hybrid (2024+) ECU via KWP2000-over-CAN (ISO 15765).
+Complete documentation and tools for reverse-engineering the Kawasaki Ninja 7 Hybrid (2024+) ECU via KWP2000-over-CAN (ISO 15765) and passive CAN bus monitoring.
 
-## What This Does
+## What This Project Is
 
-These Python scripts communicate with the Ninja 7 Hybrid's ECU through a CAN adapter (SocketCAN) to:
-- Read live sensor data (RPM, temperatures, pressure, speed, gear, etc.)
-- Read ECU identification and calibration data
-- **Passively monitor 27 CAN broadcast IDs** (no ECU requests needed)
-- Decode ECU firmware version, part number, and calibration date from broadcast
-- Start diagnostic routines
-- Probe KWP2000 services and local identifiers
+The Ninja 7 Hybrid is Kawasaki's first hybrid motorcycle. Its ECU uses the KWP2000 diagnostic protocol over CAN bus, with proprietary extensions. This project documents every CAN message and KWP2000 service we've discovered through reverse engineering — **27 passive CAN broadcast IDs fully decoded, 200+ KWP2000 PIDs probed, and drive mode encoding cracked**.
 
-## Confirmed Sensor Map (KWP2000 Service 0x21)
+No SecurityAccess required. No dealer tools needed. Just a CAN adapter and these scripts.
 
-| PID | Sensor | Formula | Notes |
-|-----|--------|---------|-------|
-| 0x04 | Engine Load | byte × 100/255 % | Confirmed with throttle |
-| 0x05 | Intake Air Pressure | byte × 4 × 0.136 kPa | Swings with revs |
-| 0x06 | Coolant Temp | byte − 40 °C | Matches dash reading |
-| 0x07 | Intake Air Temp | byte − 40 °C | Stable at ambient |
-| 0x08 | Reference Value | Static 0x53 | NOT a live sensor |
-| 0x09 | Engine RPM | (A<<8\|B) / 4 | **Not** the Z1000SX formula |
-| 0x0A | Calibration Value | Static ~733 | NOT motor RPM |
-| 0x0B | Gear Position | byte (0=neutral) | From kawaduino |
-| 0x0C | Vehicle Speed | byte km/h | Single byte, not 2-byte |
-| 0x0D | Vehicle Speed (2-byte) | (A<<8\|B) / 2 kph | Active only with engine on |
-| 0x76 | Battery Voltage | byte / 8 ≈ V | ~12.5V at rest |
-| 0xB4 | Secondary MAP | byte | Tracks throttle pressure |
-| 0x1B | System Voltage | 2-byte ~3915 | ~15.3V with DC-DC |
-| 0x1C | Voltage Reference 2 | 2-byte ~3919 | Second voltage ref |
-| 0x1D/0x1E | Unknown | byte 0x6E | — |
+## Major Findings
 
-## Passive CAN Broadcast IDs
+### Drive Mode Encoding — Fully Decoded
 
-The ECU broadcasts data continuously without any request. 27 unique CAN IDs are active with key ON, 27 with engine running (including new 0x0008 startup transient).
+| Mode | 0x0054 byte[1] | 0x0280 byte[2] | Kawasaki Name |
+|------|----------------|----------------|---------------|
+| SPORT | 0x01 | 0x11 | SPORT-HYBRID |
+| ECO | 0x02 | 0x12 | ECO-HYBRID |
+| ECO+AUTO | 0x03 | 0x13 | ECO+AUTO |
+| WALK | 0x06 | 0x16 | WALK mode |
+| KEY-OFF | — | 0x19 | Power-off state |
 
-| CAN ID | Rate | Label | Notes |
-|--------|------|-------|-------|
-| 0x0008 | — | Startup Transient | Only 2 msgs at key-on |
-| 0x0100 | 100 Hz | Cluster Status | Changes with engine state |
-| 0x0111 | 50 Hz | Status Flags | — |
-| 0x0112 | 100 Hz | Status Flags | — |
-| 0x0120 | 5 Hz | Config Constant | 00 CE 00 00 |
-| 0x0121 | 100 Hz | Status Flags | — |
-| 0x0125 | 10 Hz | Status | — |
-| 0x0174 | 100 Hz | Motor Controller A | Counter in byte[4] |
-| 0x0178 | 100 Hz | Motor Controller B | Counter in byte[4] |
-| 0x017C | 100 Hz | Motor Controller C | Counter in byte[4] |
-| 0x0222 | 50 Hz | Status Flag | 00 20 |
-| 0x0271 | 1 Hz | ECU ID Part 1 | ASCII: "ML5CXGA1" |
-| 0x0272 | 1 Hz | ECU ID Part 2 | ASCII: "1RDA0435" |
-| 0x0273 | 1 Hz | ECU ID Part 3 | ASCII: "8" |
-| 0x0280 | 50 Hz | Controller Data | 64 9D 11 00 45 04 |
-| 0x0281 | 4 Hz | Motor/Electrical | Fluctuates with engine |
-| 0x0282 | 10 Hz | System Voltage | 00 58/59 00 00 |
-| 0x0283 | 100 Hz | Status Flags | — |
-| 0x0284 | 1 Hz | Temp/Voltage A | Byte[1] decreases with warmup |
-| 0x0285 | 4 Hz | Temp/Voltage B | Byte[1] decreases with warmup |
-| 0x0050 | 33 Hz | Status | 00 00 00 00 |
-| 0x0054 | 49 Hz | Status | 9D 01 00 00 |
-| 0x03E3 | 20 Hz | Status | 01 BB 00 00 00 C7 |
-| 0x070C | 10 Hz | ECU Identification | ISO-TP multi-frame (see below) |
-| 0x0710 | 10 Hz | ECU Data | ISO-TP multi-frame |
-| 0x0720 | 10 Hz | Temperatures | IAT1=(A<<8|B)/256°C, IAT2=(C<<8|D)/256°C, T3-T6=(byte-40)°C |
-| 0x0728 | 10 Hz | Controller Data | 0E 00 00 00 00 00 00 |
+- **SPORT is 0x11, ECO is 0x12** — initially decoded backwards, corrected after verification
+- **EV/HYBRID toggle**: bit 6 (0x40) in 0x0054 byte[0] and 0x0280 byte[1]
+  - 0x9D = HYBRID (engine ready), 0x5D = EV (electric only)
+  - ⚠️ 0x0280 byte[0] = 0x64 is a CONSTANT, not the EV flag — EV flag is in byte[1]
+- **"HYBRID" is NOT a separate mode** — it's part of the mode name (SPORT-HYBRID, ECO-HYBRID)
+- **ALPF (auto downshift)** is NOT on the CAN bus — requires SecurityAccess
+- **Run switch position** is NOT broadcast on CAN bus — it's a hardware starter interlock only
 
-## ECU Identification Broadcast (CAN ID 0x070C)
+### Passive CAN Broadcast IDs — Fully Decoded
 
-The ECU broadcasts its complete identification every second via ISO-TP multi-frame messages. **No SecurityAccess needed** — just listen to the bus.
+The ECU broadcasts data continuously without any request. 27+ unique CAN IDs are active with key ON.
+
+| CAN ID | Rate | Content | Formula / Notes |
+|--------|------|---------|---------|
+| 0x0004 | One-shot | Key-on/session init | bytes[1,6] change between sessions |
+| 0x0050 | 33 Hz | Ride mode | byte[0]: 0=ECO/OFF, 1=HYBRID, 2=SPORT |
+| 0x0054 | 50 Hz | Ride mode + EV | byte[0]: EV flag (bit 6: 0x40), byte[1]: mode |
+| 0x0100 | 100 Hz | Cluster/placeholder | All zeros with key ON — may activate with engine |
+| 0x0111 | 50 Hz | Unknown placeholder | All zeros — may activate with engine |
+| 0x0112 | 100 Hz | Unknown placeholder | All zeros — may activate with engine |
+| 0x0120 | ~1 Hz | Drifting value | byte[1] drifts (0xCE→0xB2), likely temp/voltage ADC |
+| 0x0121 | 100 Hz | Gear position | 00 00=Neutral, 01 00=In gear |
+| 0x0125 | 10 Hz | Unknown placeholder | All zeros — may activate with engine |
+| 0x0174 | 100 Hz | Motor Controller A | Needs engine running to decode |
+| 0x0178 | 100 Hz | Motor Controller B | Needs engine running to decode |
+| 0x017C | 100 Hz | Motor Controller C | Needs engine running to decode |
+| 0x0222 | 50 Hz | Status flag | 0x0020 = key ON |
+| 0x0271 | 1 Hz | ECU ID part 1 | ASCII: "ML5CXGA1" |
+| 0x0272 | 1 Hz | ECU ID part 2 | ASCII: "1RDA0435" |
+| 0x0273 | 1 Hz | ECU ID part 3 | Combined: ML5CXGA11RDA04358 |
+| 0x0280 | 50 Hz | Full status | byte[0]=0x64(const), byte[1]=EV flag, byte[2]=mode, byte[4]=gear, byte[5]=engine state |
+| 0x0281 | 4 Hz | Motor/electrical | byte[4]=0x00 always, needs engine running to decode |
+| 0x0282 | 10 Hz | Battery voltage | byte[1] / 8 = volts (e.g., 100 → 12.5V) |
+| 0x0283 | 100 Hz | Unknown placeholder | All zeros — may activate with engine |
+| 0x0284 | ~0.5 Hz | Temperature tracking A | byte[1] drifts (cooling), bytes[4:7]=3 temps (value-40°C) |
+| 0x0285 | ~4 Hz | Temperature tracking B | byte[1] drifting, similar pattern to 0x0284 |
+| 0x03E3 | 20 Hz | ECU status/config | 6 bytes: 01 BB 00 00 00 C7 (STATIC) |
+| 0x070C | ~1 Hz | ECU identification | Multi-frame ISO-TP, see below |
+| 0x0710 | ~10 Hz | ECU configuration | 79-frame broadcast, see below |
+| 0x0720 | 1 Hz | 6 temperature sensors | IAT1/2=(word)/256°C, T3-T6=byte-40°C |
+| 0x0728 | ~1 Hz | Heartbeat/alive | 0x0E 00 00 00 00 00 00 00 |
+
+### ECU Identification (0x070C)
+
+No SecurityAccess needed — just listen. Broadcast every ~1 second via ISO-TP multi-frame.
 
 | Frame | Content | Decoded |
 |-------|---------|---------|
-| 0x00 | Start marker | All zeros |
-| 0x01 | 07 E8 03 15 | **Calibration Date: 2024-03-15** |
-| 0x02 | ASCII | SW Version P1: "2102D11" |
-| 0x03 | ASCII | SW Version P2: "2202441" |
-| 0x04 | ASCII | SW Version P3: "56" |
-| 0x05 | 07 D0 | Build: 2000 |
-| 0x06 | 00 00 01 00 | Flags: 0x01 |
-| 0x07 | ASCII | HW Part: "26105-0" |
-| 0x08 | ASCII | HW Part P2: "001" |
-| 0x09 | ASCII | **ECU Part: "49245-2"** |
-| 0x0A | ASCII | ECU Part P2: "3050000" |
-| 0x0B | ASCII | ECU Part P3: "3000" |
-| 0x0C-0x14 | Binary | Engine-running only: runtime data, checksums, adaptive values |
-| 0x15-0x16 | Zeros | Unused/padding |
+| 0x01 | Date bytes | Calibration date: 2024-03-21 |
+| 0x02-0x04 | ASCII | SW version: `2102D11220244156` |
+| 0x05 | 0x07D0 | Build number: 2000 |
+| 0x06 | 0x0001 | Config version |
+| 0x07-0x08 | ASCII | HW part: `26105-0001` |
+| 0x09-0x0B | ASCII | ECU part: `49245-230500000` (differs from KWP2000's 49245-2655) |
+| 0x0C-0x11 | Binary | **LIVE data** (changes between captures!) |
 | 0xFF | End marker | All zeros |
 
-**Full reconstructed strings:**
-- Software: `2102D11220244156`
-- Hardware Part: `26105-0001`
-- ECU Part: `49245-2655` (matches Service 0x1A result)
-- Calibration Date: **2024-03-15**
+**Verifying a dealer ECU update:** Compare 0x070C before and after. If calibration date or SW version changes, the update took effect.
 
-Frames 0x0C-0x14 only appear when the engine is running and contain dynamic data (runtime counters, calibration checksums, adaptive values).
+### ECU Configuration Broadcast (0x0710)
 
-**Verifying a dealer update:** Capture 0x070C before and after. If the calibration date or software string changes, the update took effect.
+79-frame broadcast at ~10 Hz. Mostly 0xFF padding. Key data frames:
 
-## ECU Identification (KWP2000 Service 0x1A)
+| Frame | Content | Notes |
+|-------|---------|-------|
+| 0x00/0x10/0x20 | ASCII "2102D11220244156" | SW version (matches 0x070C) |
+| 0x30 | byte[1]=battery voltage | 0x64=100→12.5V, matches 0x0282 and KWP2000 PID 0x76 |
+| 0x60 | Count/version: 4 | |
+| 0x70 | Config values: 6, 7 | |
+| 0x80 | Build: 0x0322=802 | |
+| 0x90 | Identifier: 0x3212=12818 | |
+| 0xB0 | Config + CRC | |
+| 0xC0 | Config values | |
+| 0xCD | End marker | All zeros |
 
-| Sub-ID | Value |
-|--------|-------|
-| 0x80 | ML5CXGA11RDA04358 (ECU hardware ID) |
-| 0x81 | 49245-2655 (Kawasaki part number) |
-| 0x82 | 0xCBE8 (calibration checksum — per-firmware, changes with updates) |
-| 0x83 | 0x02 (config/hardware version) |
-| 0x84/0x85 | 55-byte calibration tables |
+All data is STATIC except checksum bytes in frames 0x30 and 0xB0.
 
-## How This Differs from Z1000SX / Older Kawasaki
+### Temperature Sensors (0x0720)
 
-| Aspect | Z1000SX (kawaduino) | Ninja 7 Hybrid (ours) |
-|--------|---------------------|----------------------|
-| RPM formula | (A×255+B)/255×100 or A×100+B | **(A<<8\|B)/4** |
-| Coolant temp formula | (value−48)/1.6 | **value−40** |
-| IAP/IAT PIDs | 0x07=IAP, 0x05=IAT | **0x05=IAP, 0x07=IAT** (reversed) |
-| SecurityAccess | 3 hardcoded 5-byte seed-key pairs | **6-byte random seeds** (not crackable with old pairs) |
-| PID 0x08 | ABS Pressure | **Static reference value** (0x53) |
-| PID 0x0A | Unknown | **Static calibration value** (~733) |
-| PID 0x76 | Not documented | **Battery voltage** (/8) |
-| Passive broadcasts | Not documented | **27 CAN IDs** broadcasting continuously |
-| ECU firmware version | Not readable without KDS | **Readable from 0x070C broadcast** |
+| Sensor | Formula | Key ON (engine off) |
+|--------|---------|---------------------|
+| IAT1 | (byte[0]<<8 \| byte[1]) / 256 °C | ~15°C (ambient) |
+| IAT2 | (byte[2]<<8 \| byte[3]) / 256 °C | ~15°C (ambient) |
+| T3 | byte[4] − 40 °C | ~38°C (motor/inverter) |
+| T4 | byte[5] − 40 °C | ~37°C |
+| T5 | byte[6] − 40 °C | ~37°C |
+| T6 | byte[7] − 40 °C | ~37°C |
 
-## Supported KWP2000 Services
+Note: T3-T6 are motor/inverter temperatures, NOT coolant (which reads 29°C via KWP2000).
+
+### Battery Voltage (0x0282)
+
+`byte[1] / 8 = volts` — confirmed matching KWP2000 PID 0x76 (e.g., 100 → 12.5V)
+
+### Motor/Electrical (0x0281)
+
+Format: `D2 [b1] [D0/D1] [b3] 00 [b5] [3B/3C] [64]`
+
+| Byte | Value Range | Notes |
+|------|-------------|-------|
+| 0 | 0xD2 | Constant message type |
+| 1 | 60-184 | Varies — possibly current or torque offset |
+| 2 | 0xD0-0xD1 | Sub-type, rarely flickers |
+| 3 | 5-243 | Varies independently of b1 — possibly inverter/HV value |
+| 4 | 0x00 | Always zero |
+| 5 | 10-18 | Slow counter or sub-state |
+| 6-7 | 0x3B64 or 0x3C64 | Constant within session, drifts between sessions |
+
+**Needs engine running at known RPMs to decode actual meaning.**
+
+## KWP2000 Active Diagnostics (ECU Request Required)
+
+### Working Services
 
 | Service | Status | Notes |
 |---------|--------|-------|
-| 0x10 | ✅ | StartDiagnosticSession (0x80 only) |
-| 0x13 | ✅ | StartDiagnosticRoutine (routine 0x01 accepted) |
-| 0x18 | ✅ | ReadDTCByStatus (0 DTCs found) |
-| 0x1A | ✅ | ReadECUIdentification (IDs 0x80-0x85) |
-| 0x21 | ✅ | ReadDataByLocalId (see sensor map) |
-| 0x27 | ✅ | SecurityAccess (level 0x07 gives 6-byte random seed) |
+| 0x10 | ✅ | Session type **0x80 only** — type 0x81 causes lockout |
+| 0x13 | ✅ | Routine 0x01 starts successfully |
+| 0x18 | ✅ | Read DTCs |
+| 0x1A | ✅ | ECU ID (part number, serial, calibration) |
+| 0x21 | ✅ | Read data by local ID (200+ PIDs respond) |
 
-**Not supported:** 0x11, 0x12, 0x14, 0x17, 0x1B/0x1C/0x1E, 0x22, 0x2F/0x30, 0x34, 0x3B, 0x85/0x86/0x87
+**Not supported:** 0x11, 0x12, 0x14, 0x17, 0x22, 0x2F/0x30, 0x34, 0x3B, 0x85/0x86/0x87
+
+### Key PIDs (Service 0x21)
+
+| PID | Content | Formula |
+|-----|---------|---------|
+| 0x04 | Engine load | byte × 100/255 % |
+| 0x05 | IAP | byte × 4 × 0.136 kPa |
+| 0x06 | Coolant temp | value − 40 °C |
+| 0x07 | IAT | value − 40 °C |
+| 0x08 | Reference value | Static 0x53 (NOT oil temp) |
+| 0x09 | RPM | (A<<8 \| B) / 4 |
+| 0x0A | Calibration | Static ~733 (NOT motor RPM) |
+| 0x76 | Battery voltage | value / 8 = V |
+| 0x1B | System voltage A | (A<<8\|B) / 256 ≈ 15.3V |
+| 0x1C | System voltage B | (A<<8\|B) / 256 ≈ 15.3V |
+| 0x44-0x4F | Hybrid config | Static, don't change with mode |
+| 0x74 | Temperature sensor | Drifts slowly (0x51-0x5B) |
+| 0xB1 | Calibration constant | 0xCB (static) |
+
+### SecurityAccess
+
+The Ninja 7 Hybrid ECU uses **6-byte random seeds** (Service 0x27, level 0x07). This is NOT the old 5-byte hardcoded Kawasaki system from the Z1000SX. All known algorithms (XOR, rotation, addition) have failed. The seed→key algorithm is proprietary and requires KDS dealer software to reverse.
+
+## Key Differences from Z1000SX (kawaduino/aster94)
+
+| Aspect | Z1000SX | Ninja 7 Hybrid |
+|--------|----------|---------------|
+| RPM formula | (A×255+B)/255×100 | **(A<<8\|B)/4** |
+| Temp formula | (value−48)/1.6 | **value − 40** |
+| IAP/IAT PIDs | 0x07=IAP, 0x05=IAT | **0x05=IAP, 0x07=IAT** (reversed) |
+| SecurityAccess | 5-byte hardcoded pairs | **6-byte random seeds** |
+| Drive modes | Not documented | **0x11=SPORT, 0x12=ECO, 0x13=AUTO, 0x16=WALK** |
+| EV/Hybrid toggle | N/A | **bit 6 (0x40) in 0x0054/0x0280** |
+| Passive broadcasts | Not documented | **27+ CAN IDs** fully decoded |
 
 ## Scripts
 
-### `kawasaki_sensor_probe.py` (v3.1)
-Continuous sensor reading with logging. Reads all known PIDs in a loop and decodes values.
+All scripts use `python-can` with SocketCAN. Key ON with kill switch RUN required.
 
-```bash
-python3 kawasaki_sensor_probe.py
-```
-
-Logs to `~/Downloads/can-logs/sensor_probe_YYYYMMDD_HHMMSS.txt`
-
-### `kawasaki_can_monitor.py` (v1.0) — NEW
-**Passive CAN bus monitor** — just listens, no ECU requests. Decodes all 27 known broadcast IDs in real-time. Automatically detects and prints ECU firmware version from 0x070C broadcast.
-
-```bash
-python3 kawasaki_can_monitor.py
-```
-
-Shows state changes (★ marker) and prints ECU identification on startup. Prints summary on exit including motor controller min/max values and message counts.
-
-### `can_sniffer.py` — NEW
-Raw CAN bus sniffer. Captures ALL traffic (including unknown IDs) to a log file for analysis.
-
-```bash
-python3 can_sniffer.py [duration_seconds] [output_file]
-```
-
-Default: 60 seconds, log to `can_sniffer_YYYYMMDD_HHMMSS.log`. Use for discovering new PIDs and analyzing broadcast patterns.
-
-### `can_quick_test.py` / `can_rapid_probe.py` — NEW
-Quick connectivity test and rapid PID probing utilities.
-
-### `kawasaki_clutch_relearn.py` (v5.0)
-Opens a KWP2000 diagnostic session and holds it. Can be used as a starting point for clutch relearn or other service procedures.
-
-### `kwp2000_explorer.py`
-Probes all KWP2000 services and sub-functions to discover what the ECU supports.
-
-### `kwp2000_deep_probe.py`
-Extended probing of ECU IDs (0x1A sub-IDs 0x00-0x9F), high local IDs (0xA0-0xBF), gap IDs (0x70-0x9F), and other services.
-
-### `kwp2000_routines.py` / `kwp2000_routine_test.py`
-Probes Service 0x13 (StartDiagnosticRoutine) with routine IDs 0x00-0xFF.
-
-### `kwp2000_seed_test.py`
-Tests SecurityAccess seed-key combinations. Documents that the Ninja 7 Hybrid uses 6-byte random seeds (not the old 5-byte hardcoded Kawasaki pairs).
-
-## Requirements
-
-- Python 3.8+
-- `python-can` package: `pip install python-can`
-- CAN adapter with SocketCAN support (e.g., CANable, PCAN-USB, or any SocketCAN-compatible adapter)
-- Kawasaki Ninja 7 Hybrid with key ON and kill switch RUN
+| Script | Purpose |
+|--------|---------|
+| `kawasaki_sensor_probe.py` | Continuous KWP2000 sensor reading with logging |
+| `kawasaki_can_monitor.py` | Passive CAN monitor — decodes all known broadcast IDs |
+| `can_sniffer.py` | Raw CAN sniffer — captures ALL traffic to log file |
+| `can_quick_test.py` | Quick connectivity test |
+| `can_rapid_probe.py` | Rapid KWP2000 PID probing |
+| `can_rev_capture.py` | CAN capture with mode switching |
+| `can_correlate.py` | KWP2000 + CAN temperature/voltage correlation |
+| `kawasaki_clutch_relearn.py` | KWP2000 session holder for service procedures |
+| `kwp2000_explorer.py` | Probes all KWP2000 services and sub-functions |
+| `kwp2000_deep_probe.py` | Extended PID probing (0x00-0xBF, high IDs) |
+| `kwp2000_routines.py` | Probes Service 0x13 routine IDs |
+| `kwp2000_routine_test.py` | Tests specific diagnostic routines |
+| `kwp2000_seed_test.py` | SecurityAccess seed-key analysis |
+| `kwp2000_version_info.py` | ECU identification via KWP2000 |
+| `alpf_probe.py` | ALPF (auto downshift) detection probe |
+| `key_on_capture.py` | Captures CAN IDs that appear at key-on |
+| `run_switch_capture.py` | Tests run switch position detection |
+| `motor_capture.py` | Motor controller data capture |
+| `ecu_decode.py` | Decodes 0x070C ECU identification broadcast |
+| `decode_0710.py` | Decodes 0x0710 ECU configuration broadcast |
+| `decode_03e3.py` | Detailed analysis of 0x03E3 status message |
+| `verify_0280.py` | Verifies 0x0280 format and EV flag position |
+| `analyze_0281.py` | Deep analysis of 0x0281 motor/electrical data |
+| `temp_correlate.py` | Correlates CAN temps with KWP2000 temps |
+| `quick_decode.py` | Quick passive CAN data grab |
+| `probe_zeros.py` | Probes zero-value CAN IDs |
 
 ## Setup
 
@@ -197,7 +219,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install python-can
 
-# Bring up CAN interface (adjust for your adapter)
+# Bring up CAN interface
 sudo ip link set can0 up type can bitrate 500000
 ```
 
@@ -207,33 +229,36 @@ sudo ip link set can0 up type can bitrate 500000
 - **ECU Request ID:** 0x764
 - **ECU Response ID:** 0x746
 - **Protocol:** KWP2000 over CAN (ISO 15765)
-- **Diagnostic session:** 0x80
-
-## SecurityAccess
-
-The Ninja 7 Hybrid ECU uses **6-byte random seeds** for SecurityAccess (Service 0x27, level 0x07), unlike older Kawasaki ECUs which used 5-byte hardcoded seed-key pairs. After requesting a seed, you get one attempt to send the correct key before the ECU locks (NRC 0x33). Key cycling resets the lock.
-
-All known algorithms (XOR, NOT, addition, known pairs, identity) have been tried without success. Reverse engineering the KDS (Kawasaki Diagnostic System) software would be needed to extract the seed→key algorithm.
+- **Session type:** 0x80 (0x81 causes ECU lockout!)
+- **After failed sessions:** Key cycle required to reset ECU
 
 ## SPORT Mode ECU Update
 
-Kawasaki released an April 2026 ECU update for Ninja 7/Z7 Hybrids that:
+Kawasaki offers a free ECU update (April 2026) for Ninja 7/Z7 Hybrids:
 - Adds automatic shifting in SPORT mode
-- Raises EV↔Hybrid mode switching speed
-- **Free at authorized dealers** — call with VIN, takes 20-30 minutes
+- Raises EV↔Hybrid switching speed
+- 20-30 minutes at any authorized dealer
 
-To verify the update took effect:
-1. Capture 0x070C broadcast data before the dealer visit
-2. Get the update
-3. Capture 0x070C again — if the calibration date or software string changes, the update worked
-4. The calibration checksum (Service 0x1A, sub 0x82 = 0xCBE8) should also change
+Verify by comparing 0x070C broadcast data before and after — calibration date and SW version will change.
+
+## KDS Software & SecurityAccess
+
+The Ninja 7 Hybrid's 6-byte random seed SecurityAccess cannot be cracked without the proprietary seed→key algorithm. Options:
+
+1. **Capture seed-key pairs during a dealer visit** — sniff CAN traffic while KDS performs SecurityAccess. Even a few dozen pairs might reveal the algorithm.
+
+2. **Reverse-engineer KDS 3.0 software** — obtain the dealer software (~$200-400 used kit on eBay) and extract the algorithm from its DLLs. The software is Windows-based and likely uses .NET or native libraries.
+
+3. **UnlockECU** (open source) has no Kawasaki algorithms — only European automotive ECUs.
+
+The **KDT (Kawasaki Diagnostic Tool)** app is free from kawasaki.diagsys.com/kdt but only supports M3B ECUs, likely not the Ninja 7 Hybrid's HEV ECU.
 
 ## Credits
 
-- **kawaduino** by Tom Mitchell — Z1000SX sensor map and KWP2000 reference implementation
+- **kawaduino** by Tom Mitchell — Z1000SX sensor map and KWP2000 reference
 - **aster94/KWP2000** — Arduino KWP2000 library with Kawasaki-specific sensor decoding
-- **Scissor (Arduino forum)** — Discovered the 3 hardcoded Kawasaki seed-key pairs (older ECUs only)
+- **Scissor (Arduino forum)** — Original 5-byte Kawasaki seed-key pairs (older ECUs only)
 
 ## License
 
-MIT — Use at your own risk. Modifying ECU parameters or running diagnostic routines can affect vehicle operation. The authors are not responsible for any damage to your motorcycle.
+MIT — Use at your own risk. Not responsible for damage to your motorcycle.
