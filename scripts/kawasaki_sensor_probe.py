@@ -16,6 +16,38 @@ Confirmed sensor map (June 2026):
   0x0D - Vehicle Speed (2-byte, (A<<8|B)/2 kph) — from kawaduino
   0xB4 - Secondary MAP/throttle pressure — tracks IAP
 
+Passive broadcast CAN IDs (no ECU request needed):
+  0x0100 (100Hz) - Cluster Status
+  0x0111 (50Hz)  - Status Flags
+  0x0112 (100Hz) - Status Flags
+  0x0120 (5Hz)   - Config Constant
+  0x0121 (100Hz) - Status Flags
+  0x0125 (10Hz)  - Status
+  0x0174 (100Hz) - Motor Controller A (rapidly changing)
+  0x0178 (100Hz) - Motor Controller B (rapidly changing)
+  0x017C (100Hz) - Motor Controller C (rapidly changing)
+  0x0222 (50Hz)  - Status flag (0x0020)
+  0x0271-0x0273   - ECU ID ASCII broadcast (1Hz): "ML5CXGA11RDA04358"
+  0x0280 (50Hz)  - Controller Data
+  0x0281 (4Hz)   - Motor/Electrical (fluctuating with engine)
+  0x0282 (10Hz)  - System Voltage/Status
+  0x0283 (100Hz) - Status Flags
+  0x0284 (1Hz)   - Temp/Voltage A (decreases with warmup)
+  0x0285 (4Hz)   - Temp/Voltage B (decreases with warmup)
+  0x0050 (33Hz)  - Status
+  0x0054 (49Hz)  - Status
+  0x03E3 (20Hz)  - Status
+  0x070C (10Hz)  - ECU Ident ISO-TP broadcast (1Hz cycle):
+    Frame 0x01: Cal date (0x07E8=year, month, day)
+    Frame 0x02-0x04: SW version (ASCII)
+    Frame 0x05: Build value
+    Frame 0x06: Flags
+    Frame 0x07-0x08: Part number (ASCII "26105-001")
+    Frame 0x09-0x0A: Serial/model (ASCII)
+  0x0710 (10Hz)  - ECU Data ISO-TP broadcast
+  0x0720 (10Hz)  - Temperatures? (0x0F38 0x0F34/35 0x50×4)
+  0x0728 (10Hz)  - Controller Data
+
 Usage:
   1. Key ON, kill switch RUN (engine OFF or ON)
   2. Run this script
