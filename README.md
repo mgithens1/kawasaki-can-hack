@@ -166,6 +166,32 @@ Format: `D2 [b1] [D0/D1] [b3] 00 [b5] [3B/3C] [64]`
 
 The Ninja 7 Hybrid ECU uses **6-byte random seeds** (Service 0x27, level 0x07). This is NOT the old 5-byte hardcoded Kawasaki system from the Z1000SX. All known algorithms (XOR, rotation, addition) have failed. The seed→key algorithm is proprietary and requires KDS dealer software to reverse.
 
+### Known Kawasaki Seed-Key Pairs (5-byte, older ECUs only)
+
+| Seed | Key | Source |
+|------|-----|--------|
+| `13 52 43 64 75` | `63 27 53 67 42` | Arduino forum (Scissor), Z750r |
+| `57 48 58 49 58` | `30 20 39 48 74` | Arduino forum (Scissor), Z750r |
+| `58 37 48 45 95` | `58 49 57 69 84` | Arduino forum (Scissor), Z750r |
+
+These are **5-byte fixed pairs** from older Kawasaki ECUs (Z750r, Ninja 400, etc.) and do NOT work on the Ninja 7 Hybrid, which uses **6-byte random seeds**. The `security_access_deep.py` script tests these and many algorithmic transforms automatically.
+
+### KDS Diagnostic Hardware
+
+| Part Number | Description | Notes |
+|-------------|-------------|-------|
+| 57001-1504 | KDS Signal Converter (old) | May not fit Ninja 7 Hybrid connector |
+| 57001-1725 | KDS3 Adapter (current) | Current dealer hardware |
+| 57001-1843 | Data Link Cable | Specific to 6-pin connector on Ninja 7 Hybrid |
+| 99969-6490 | KEI Diagnostic Kit | Current dealer kit (Bluetooth + USB) |
+| KDT/DiagSys | Diagnostic software | Free download at kawasaki.diagsys.com — no SecurityAccess |
+| KDS3 | Dealer diagnostic software | Has SecurityAccess but dealer-restricted, not publicly available |
+
+### Aftermarket ECU Flash Support
+
+- **Woolich Racing**: No support for Ninja 7 Hybrid
+- **FTECU**: No support for Ninja 7 Hybrid
+
 ## Key Differences from Z1000SX (kawaduino/aster94)
 
 | Aspect | Z1000SX | Ninja 7 Hybrid |
@@ -197,6 +223,7 @@ All scripts use `python-can` with SocketCAN. Key ON with kill switch RUN require
 | `kwp2000_routines.py` | Probes Service 0x13 routine IDs |
 | `kwp2000_routine_test.py` | Tests specific diagnostic routines |
 | `kwp2000_seed_test.py` | SecurityAccess seed-key analysis |
+| `security_access_deep.py` | Comprehensive SecurityAccess testing (5 phases: level probing, randomness analysis, known Kawasaki 5-byte pairs, algorithmic transforms, extended timing) |
 | `kwp2000_version_info.py` | ECU identification via KWP2000 |
 | `alpf_probe.py` | ALPF (auto downshift) detection probe |
 | `key_on_capture.py` | Captures CAN IDs that appear at key-on |
