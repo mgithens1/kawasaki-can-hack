@@ -162,9 +162,27 @@ Format: `D2 [b1] [D0/D1] [b3] 00 [b5] [3B/3C] [64]`
 | 0x74 | Temperature sensor | Drifts slowly (0x51-0x5B) |
 | 0xB1 | Calibration constant | 0xCB (static) |
 
-### SecurityAccess
+### SecurityAccess — Exhaustively Tested
 
-The Ninja 7 Hybrid ECU uses **6-byte random seeds** (Service 0x27, level 0x07). This is NOT the old 5-byte hardcoded Kawasaki system from the Z1000SX. All known algorithms (XOR, rotation, addition) have failed. The seed→key algorithm is proprietary and requires KDS dealer software to reverse.
+The Ninja 7 Hybrid ECU uses a **6-byte random seed** system for SecurityAccess:
+
+- **Seed request:** `0x27 0x07` → 6-byte seed (5 random bytes + fixed `0x34` suffix)
+- **Key send:** `0x27 0x06` → 6-byte key (NOT `0x08` — that returns NRC `0x12`)
+- **Wrong key:** NRC `0x33` (accessDenied), then ECU locks SecurityAccess until key cycle
+- **One attempt per key cycle** — after a wrong key, you can't even request another seed
+- **Byte 5 of seed is always `0x34`** (confirmed across 25+ seeds)
+
+**50 key attempts tested, all returned NRC 0x33:**
+
+| Category | Attempts | Transforms | Result |
+|----------|----------|------------|--------|
+| Known Kawasaki 5-byte pairs (padded) | 9 | Front/back/0x34 padding | 0x33 |
+| Simple per-byte transforms | 14 | XOR, NOT, reverse, inc, dec, add/sub, shift | 0x33 |
+| Multi-byte transforms | 18 | Swap pairs, rotations, cumulative XOR, chain XOR, carry/borrow, multiply | 0x33 |
+| Known pair offset extrapolation | 3 | Per-byte offsets from 5-byte pairs | 0x33 |
+| 5-byte keys | 6 | Identity, XOR, raw known pairs (without 6th byte) | 0x33 |
+
+The seed→key algorithm is **NOT** a simple per-byte transform, rotation, or XOR pattern. It is almost certainly a proper cryptographic function or lookup table that requires the KDS dealer software or ECU firmware to reverse.
 
 ### Known Kawasaki Seed-Key Pairs (5-byte, older ECUs only)
 
