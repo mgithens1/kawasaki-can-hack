@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kawasaki Ninja 7 Hybrid — CAN Bus Monitor v1.0
+Kawasaki Ninja 7 Hybrid — CAN Bus Monitor v1.1
 Passively reads broadcast CAN messages (no ECU requests needed).
 Decodes known broadcast IDs in real-time.
 
@@ -30,7 +30,7 @@ Confirmed broadcast map (June 2026, Ninja 7 Hybrid ECU ML5CXGA11RDA04358):
   0x03E3 (20 Hz)  — Status (01 BB 00 00 00 C7)
   0x070C (10 Hz)  — ECU Identification (ISO-TP multi-frame broadcast)
   0x0710 (10 Hz)  — ECU Data (ISO-TP multi-frame broadcast)
-  0x0720 (10 Hz)  — Temperatures? (0F 38 0F 34/35 50 50 50 50)
+  0x0720 (10 Hz)  — Temperatures (IAT×2 + 4× coolant-style sensors, byte-40)
   0x0728 (10 Hz)  — Controller data (0E 00 00 00 00 00 00)
 
   0x070C ISO-TP frames (1 Hz cycle):
@@ -81,15 +81,16 @@ BROADCAST_IDS = {
     0x0281: ("Motor/Electrical", 4, lambda d: d.hex(' ')),
     0x0282: ("System Voltage?", 10, lambda d: f"raw={d[1]:02X} ({d[1]})" if len(d)>=2 else d.hex(' ')),
     0x0283: ("Status 0x283", 100, lambda d: d.hex(' ')),
-    0x0284: ("Temp/Voltage A", 1, lambda d: f"byte1={d[1]:02X}({d[1]})" if len(d)>=2 else d.hex(' ')),
-    0x0285: ("Temp/Voltage B", 4, lambda d: f"byte1={d[1]:02X}({d[1]})" if len(d)>=2 else d.hex(' ')),
+    0x0284: ("Temp/Volt A", 1, lambda d: f"b0={d[0]:02X} b1={d[1]:02X}({d[1]})" if len(d)>=2 else d.hex(' ')),
+    0x0285: ("Temp/Volt B", 4, lambda d: f"b0={d[0]:02X} b1={d[1]:02X}({d[1]})" if len(d)>=2 else d.hex(' ')),
     0x0050: ("Status 0x050", 33, lambda d: d.hex(' ')),
     0x0054: ("Status 0x054", 49, lambda d: f"0x{d[0]:02X} 0x{d[1]:02X}" if len(d)>=2 else d.hex(' ')),
     0x03E3: ("Status 0x3E3", 20, lambda d: d.hex(' ')),
     0x070C: ("ECU Ident Broadcast", 10, None),  # Special ISO-TP handling
     0x0710: ("ECU Data Broadcast", 10, None),  # Special ISO-TP handling
-    0x0720: ("Temperatures?", 10, lambda d: 
-             f"t1={(d[0]<<8|d[1])} t2={(d[2]<<8|d[3])} v3={d[4]:02X} v4={d[5]:02X} v5={d[6]:02X} v6={d[7]:02X}" 
+    0x0720: ("Temperatures", 10, lambda d: 
+             f"IAT1={(d[0]<<8|d[1])/256:.1f}°C IAT2={(d[2]<<8|d[3])/256:.1f}°C "
+             f"T3={d[4]-40}°C T4={d[5]-40}°C T5={d[6]-40}°C T6={d[7]-40}°C" 
              if len(d)>=8 else d.hex(' ')),
     0x0728: ("Controller 0x728", 10, lambda d: d.hex(' ')),
 }
@@ -159,7 +160,7 @@ def decode_ecu_id_broadcast():
 
 def main():
     print("=" * 74)
-    print("  Kawasaki Ninja 7 Hybrid — CAN Bus Monitor v1.0")
+    print("  Kawasaki Ninja 7 Hybrid — CAN Bus Monitor v1.1")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("  PASSIVE MODE — No messages sent to ECU")
     print("  Decoding known broadcast IDs in real-time")
