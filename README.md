@@ -63,7 +63,7 @@ The ECU broadcasts data continuously without any request. 27 unique CAN IDs are 
 | 0x03E3 | 20 Hz | Status | 01 BB 00 00 00 C7 |
 | 0x070C | 10 Hz | ECU Identification | ISO-TP multi-frame (see below) |
 | 0x0710 | 10 Hz | ECU Data | ISO-TP multi-frame |
-| 0x0720 | 10 Hz | Temperatures? | 0F 38 0F 34/35 50×4 |
+| 0x0720 | 10 Hz | Temperatures | IAT1=(A<<8|B)/256°C, IAT2=(C<<8|D)/256°C, T3-T6=(byte-40)°C |
 | 0x0728 | 10 Hz | Controller Data | 0E 00 00 00 00 00 00 |
 
 ## ECU Identification Broadcast (CAN ID 0x070C)
