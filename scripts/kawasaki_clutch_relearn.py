@@ -347,11 +347,15 @@ def main():
             while True:
                 now = time.time()
                 if now - last_keepalive >= 2.0:
-                    bus.send(tester_present)
-                    ts = time.strftime('%H:%M:%S')
-                    print(f"  [{ts}] Tester Present sent")
-                    log.write(f"{ts} Tester Present\n")
-                    last_keepalive = now
+                    try:
+                        bus.send(tester_present)
+                        ts = time.strftime('%H:%M:%S')
+                        print(f"  [{ts}] Tester Present sent")
+                        log.write(f"{ts} Tester Present\n")
+                        last_keepalive = now
+                    except can.CanOperationError:
+                        print(f"  [{time.strftime('%H:%M:%S')}] CAN error on keepalive, retrying...")
+                        time.sleep(1)
 
                 msg = bus.recv(0.1)
                 if msg and msg.arbitration_id == ECU_RX:
